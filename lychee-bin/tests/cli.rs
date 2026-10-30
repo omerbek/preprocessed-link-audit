@@ -3905,6 +3905,67 @@ The config file should contain every possible key for documentation purposes."
     }
 
     #[test]
+    fn test_preprocessed_fragment_targets() {
+        let dir = fixtures_path!().join("pre");
+        let script = dir.join(if cfg!(windows) {
+            "fragment-preprocess.cmd"
+        } else {
+            "fragment-preprocess.sh"
+        });
+        let calls = tempdir().unwrap();
+        let calls_log = calls.path().join("calls.log");
+
+        cargo_bin_cmd!()
+            .current_dir(&dir)
+            .args(["--offline", "--include-fragments", "--no-progress"])
+            .arg("fragment-source.md")
+            .assert()
+            .failure()
+            .code(2)
+            .stdout(contains("Cannot find fragment"));
+
+        cargo_bin_cmd!()
+            .current_dir(&dir)
+            .env("FRAGMENT_CALLS_LOG", &calls_log)
+            .args([
+                "--offline",
+                "--include-fragments",
+                "--no-progress",
+                "--preprocess",
+            ])
+            .arg(&script)
+            .arg("fragment-source.md")
+            .assert()
+            .success();
+
+        let calls = fs::read_to_string(&calls_log).unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|line| line.trim() == "fragment-target.md")
+                .count(),
+            1,
+            "a target with multiple fragments should be transformed once; log: {calls:?}"
+        );
+
+        cargo_bin_cmd!()
+            .current_dir(&dir)
+            .env("FAIL_FRAGMENT_TARGET", "1")
+            .args([
+                "--offline",
+                "--include-fragments",
+                "--no-progress",
+                "--preprocess",
+            ])
+            .arg(&script)
+            .arg("fragment-source.md")
+            .assert()
+            .failure()
+            .code(2)
+            .stdout(contains("target preprocessor failed"));
+    }
+
+    #[test]
     fn test_mdx_file() {
         let file = fixtures_path!().join("mdx").join("test.mdx");
         cargo_bin_cmd!()

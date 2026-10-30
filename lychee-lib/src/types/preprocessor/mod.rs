@@ -24,6 +24,10 @@ impl From<String> for Preprocessor {
 }
 
 impl Preprocessor {
+    pub(crate) fn command(&self) -> &str {
+        &self.command
+    }
+
     /// Try to invoke the preprocessor command with `path` as single argument
     /// and return the resulting stdout.
     pub(crate) fn process(&self, path: &PathBuf) -> Result<String> {

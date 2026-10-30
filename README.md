@@ -1,3 +1,20 @@
+# Preprocessed Link Audit
+
+**Independent, modified derivative of [lycheeverse/lychee](https://github.com/lycheeverse/lychee), not an official Lychee release.** This repository preserves the upstream Git history, copyright, and `LICENSE-MIT` / `LICENSE-APACHE` files. The original program and library are still named `lychee` / `lychee-lib`; the repository name identifies this separately maintained correction, not a new authorship claim. The original artwork, integrations and release instructions below describe upstream and are not releases of this repository.
+
+This derivative addresses [reported issue #2303](https://github.com/lycheeverse/lychee/issues/2303): when `--preprocess` and `--include-fragments` are combined, local fragment targets are checked against the **preprocessed** content rather than the original file. The same target is transformed once per run even if several fragments point to it; a target transformation failure is reported as a failure instead of silently passing. Without `--preprocess`, existing file-reading behavior is unchanged. The reporter's reproduction and tradeoff discussion are credited in the linked issue.
+
+To build and run this repository locally:
+
+```sh
+cargo build --locked -p lychee
+target/debug/lychee --offline --include-fragments --no-progress --preprocess ./my-preprocessor ./source.md
+```
+
+The configured preprocessor is a program you supply and executes with local file access. Only run trusted preprocessors. Processing happens synchronously, as in the original input handling, and file contents are cached within one check; file changes while a run is in progress are not re-read. This repository removes upstream publishing automations to prevent accidental releases from a separately owned GitHub repository.
+
+---
+
 <div align="center">
 
 <a name="back-to-top"></a>

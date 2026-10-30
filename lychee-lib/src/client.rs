@@ -29,7 +29,7 @@ use secrecy::{ExposeSecret, SecretString};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    BaseInfo, ErrorKind, Methods, Request, Response, Result, Status, Uri,
+    BaseInfo, ErrorKind, Methods, Preprocessor, Request, Response, Result, Status, Uri,
     chain::RequestChain,
     checker::{file::FileChecker, mail::MailChecker, website::WebsiteChecker},
     filter::Filter,
@@ -321,6 +321,9 @@ pub struct ClientBuilder {
     /// Controls which fragment types are checked in links.
     fragment_checker_options: FragmentCheckerOptions,
 
+    /// Optional transformation applied to local fragment targets before validation.
+    preprocessor: Option<Preprocessor>,
+
     /// Enable the checking of wikilinks in markdown files.
     /// Note that base must not be `None` if you set this `true`.
     include_wikilinks: bool,
@@ -428,6 +431,7 @@ impl ClientBuilder {
                 self.index_files,
                 self.fragment_checker_options,
                 self.include_wikilinks,
+                self.preprocessor,
             )?,
         })
     }

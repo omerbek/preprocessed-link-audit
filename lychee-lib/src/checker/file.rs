@@ -3,10 +3,11 @@ use log::warn;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+use crate::async_lib::cache::Cache;
 use crate::checker::fallback_candidates;
 use crate::checker::wikilink::resolver::WikilinkResolver;
 use crate::{
-    BaseInfo, ErrorKind, FragmentCheckerOptions, Result, Status, Uri,
+    BaseInfo, ErrorKind, FileType, FragmentCheckerOptions, Preprocessor, Result, Status, Uri,
     utils::fragment_checker::{FragmentChecker, FragmentInput},
 };
 
@@ -34,6 +35,9 @@ pub(crate) struct FileChecker {
     fragment_checker_options: FragmentCheckerOptions,
     /// Utility for performing fragment checks in HTML files.
     fragment_checker: FragmentChecker,
+    /// Optional preprocessor and its per-file, single-flight result cache.
+    preprocessor: Option<Preprocessor>,
+    content_cache: Option<Cache<PathBuf, std::result::Result<String, String>>>,
     /// Utility for optionally resolving Wikilinks.
     wikilink_resolver: Option<WikilinkResolver>,
 }
@@ -46,8 +50,9 @@ impl FileChecker {
     /// * `base` - Optional base path or URL for resolving wikilinks.
     /// * `fallback_extensions` - List of extensions to try if the original file is not found.
     /// * `index_files` - Optional list of index file names to search for if the path is a directory.
-    /// * `fragment_option` - Controls which fragment types are checked in supported files.
+    /// * `fragment_checker_options` - Controls which fragment types are checked in supported files.
     /// * `include_wikilinks` - Whether to check the existence of Wikilinks found in Markdown files .
+    /// * `preprocessor` - Optional command for reading fragment target content.
     ///
     /// # Errors
     ///
@@ -58,6 +63,7 @@ impl FileChecker {
         index_files: Option<Vec<String>>,
         fragment_checker_options: FragmentCheckerOptions,
         include_wikilinks: bool,
+        preprocessor: Option<Preprocessor>,
     ) -> Result<Self> {
         let wikilink_resolver = if include_wikilinks {
             Some(WikilinkResolver::new(base, fallback_extensions.clone())?)
@@ -70,6 +76,8 @@ impl FileChecker {
             index_files,
             fragment_checker_options,
             fragment_checker: FragmentChecker::new(),
+            content_cache: preprocessor.as_ref().map(|_| Cache::new()),
+            preprocessor,
             wikilink_resolver,
         })
     }
@@ -277,19 +285,65 @@ impl FileChecker {
             return ErrorKind::InvalidFragment(uri.clone()).into();
         }
 
-        match FragmentInput::from_path(path).await {
-            Ok(input) => match self
-                .fragment_checker
-                .check(input, &uri.url, self.fragment_checker_options)
-                .await
-            {
-                Ok(true) => Status::Ok(StatusCode::OK),
-                Ok(false) => ErrorKind::InvalidFragment(uri.clone()).into(),
+        let preprocessed = if let Some(preprocessor) = &self.preprocessor {
+            let cache = self
+                .content_cache
+                .as_ref()
+                .expect("configured preprocessor has a content cache");
+            let result = match cache.lock_entry(path) {
+                Ok(setter) => setter.set(preprocessor.process(&path.to_path_buf()).map_err(
+                    |err| match err {
+                        ErrorKind::PreprocessorError { reason, .. } => reason,
+                        other => other.to_string(),
+                    },
+                )),
+                Err(getter) => getter,
+            };
+            match result.wait().await {
+                Ok(content) => Some(content),
+                Err(err) => {
+                    return ErrorKind::PreprocessorError {
+                        command: preprocessor.command().to_owned(),
+                        reason: err.to_string(),
+                    }
+                    .into();
+                }
+            }
+        } else {
+            None
+        };
+        let input = if let Some(content) = &preprocessed {
+            match content.as_ref() {
+                Ok(text) => FragmentInput {
+                    content: Cow::Borrowed(text),
+                    file_type: FileType::from(path),
+                },
+                Err(reason) => {
+                    return ErrorKind::PreprocessorError {
+                        command: self.preprocessor.as_ref().unwrap().command().to_owned(),
+                        reason: reason.clone(),
+                    }
+                    .into();
+                }
+            }
+        } else {
+            match FragmentInput::from_path(path).await {
+                Ok(input) => input,
                 Err(err) => {
                     warn!("Skipping fragment check for {uri} due to the following error: {err}");
-                    Status::Ok(StatusCode::OK)
+                    return Status::Ok(StatusCode::OK);
                 }
-            },
+            }
+        };
+
+        match self
+            .fragment_checker
+            .check(input, &uri.url, self.fragment_checker_options)
+            .await
+        {
+            Ok(true) => Status::Ok(StatusCode::OK),
+            Ok(false) => ErrorKind::InvalidFragment(uri.clone()).into(),
+            Err(err) if self.preprocessor.is_some() => err.into(),
             Err(err) => {
                 warn!("Skipping fragment check for {uri} due to the following error: {err}");
                 Status::Ok(StatusCode::OK)
@@ -402,6 +456,7 @@ mod tests {
                 check_text_fragments: false,
             },
             false,
+            None,
         )
         .unwrap();
 
@@ -465,6 +520,7 @@ mod tests {
                 check_text_fragments: false,
             },
             false,
+            None,
         )
         .unwrap();
 
@@ -505,6 +561,7 @@ mod tests {
             Some(vec!["index".to_owned()]),
             FragmentCheckerOptions::default(),
             false,
+            None,
         )
         .unwrap();
 
@@ -536,6 +593,7 @@ mod tests {
             Some(vec![]),
             FragmentCheckerOptions::default(),
             false,
+            None,
         )
         .unwrap();
         assert_resolves!(
@@ -567,6 +625,7 @@ mod tests {
             Some(dir_names),
             FragmentCheckerOptions::default(),
             false,
+            None,
         )
         .unwrap();
         assert_resolves!(
@@ -593,6 +652,7 @@ mod tests {
                 check_text_fragments: false,
             },
             false,
+            None,
         )
         .unwrap();
         assert_resolves!(
@@ -616,6 +676,7 @@ mod tests {
                 check_text_fragments: false,
             },
             false,
+            None,
         )
         .unwrap();
         assert_resolves!(
@@ -636,6 +697,7 @@ mod tests {
                 check_text_fragments: false,
             },
             false,
+            None,
         )
         .unwrap();
 
@@ -669,6 +731,7 @@ mod tests {
                 check_text_fragments: false,
             },
             false,
+            None,
         )
         .unwrap();
 
@@ -715,6 +778,7 @@ mod tests {
                 check_text_fragments: false,
             },
             false,
+            None,
         )
         .unwrap()
     }
